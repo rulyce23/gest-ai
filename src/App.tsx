@@ -44,7 +44,8 @@ function App() {
   // Handle manual TTS
   const handleManualTTS = (text: string) => {
     console.log('🔊 App: Manual TTS requested for:', text);
-    speakText(text);
+    // fire-and-forget but surface errors
+    speakText(text).catch(err => console.error('Manual TTS failed:', err));
   };
 
   // Initialize TTS service
@@ -111,7 +112,13 @@ function App() {
       console.log('📝 App: TTS text:', mapping.text);
 
       // Use simple TTS function - no Promise, just trigger
-      speakText(mapping.text);
+      // Ensure TTS service exists (in case detection fired before mount effect)
+      if (!ttsServiceRef.current) {
+        ttsServiceRef.current = new TTSService(settings);
+      }
+
+      // Fire-and-forget speak; speakText already tries audio-unlock
+      void speakText(mapping.text);
 
       console.log('🚀 App: TTS started immediately for:', mapping.text);
     } else {
@@ -130,66 +137,52 @@ function App() {
     }, 4000); // Increased to 4 seconds to allow TTS to complete
   };
 
-  // Simple TTS function without Promise complexity
-  const speakText = (text: string) => {
-    console.log('🔊 App: Direct TTS called with:', text);
+  // Centralized TTS entry that uses TTSService (which attempts audio-unlock)
+  const speakText = async (text: string) => {
+    console.log('🔊 App: speakText called with:', text);
 
     if (!settings.ttsEnabled) {
       console.log('🔇 App: TTS disabled');
       return;
     }
 
+    // Prefer using the TTSService (it performs audio-unlock attempts)
+    if (ttsServiceRef.current) {
+      try {
+        await ttsServiceRef.current.speak(text);
+        return;
+      } catch (err) {
+        console.error('🔊 App: TTSService.speak failed, falling back to speechSynthesis', err);
+        // fallthrough to fallback below
+      }
+    }
+
+    // Fallback: direct speechSynthesis (best-effort)
     if (!('speechSynthesis' in window)) {
       console.error('❌ App: TTS not supported in this browser');
       return;
     }
 
-    // Stop any current speech
-    window.speechSynthesis.cancel();
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = settings.ttsRate || 1;
+      utterance.pitch = settings.ttsPitch || 1;
+      utterance.volume = settings.ttsVolume || 1;
+      utterance.lang = 'id-ID';
 
-    // Create utterance
-    const utterance = new SpeechSynthesisUtterance(text);
-    console.log('🎤 App: Created utterance');
-
-    // Set properties
-    utterance.rate = settings.ttsRate || 1;
-    utterance.pitch = settings.ttsPitch || 1;
-    utterance.volume = settings.ttsVolume || 1;
-    utterance.lang = 'id-ID';
-
-    // Event listeners
-    utterance.onstart = () => {
-      console.log('🔊 App: TTS STARTED speaking');
-    };
-
-    utterance.onend = () => {
-      console.log('🔊 App: TTS FINISHED speaking');
-    };
-
-    utterance.onerror = (event) => {
-      console.error('🔊 App: TTS ERROR -', event.error);
-    };
-
-    // Try to set Indonesian voice
-    const voices = window.speechSynthesis.getVoices();
-    console.log('🔊 App: Available voices:', voices.length);
-
-    if (voices.length > 0) {
-      const indonesianVoice = voices.find(voice =>
-        voice.lang.includes('id') || voice.name.toLowerCase().includes('indonesia')
-      );
-
-      if (indonesianVoice) {
-        console.log('🔊 App: Using Indonesian voice:', indonesianVoice.name);
-        utterance.voice = indonesianVoice;
-      } else {
-        console.log('🔊 App: Using default voice');
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        const indonesianVoice = voices.find(voice =>
+          voice.lang.includes('id') || voice.name.toLowerCase().includes('indonesia')
+        );
+        if (indonesianVoice) utterance.voice = indonesianVoice;
       }
-    }
 
-    // Speak immediately
-    console.log('🔊 App: Executing speech synthesis...');
-    window.speechSynthesis.speak(utterance);
+      window.speechSynthesis.speak(utterance);
+    } catch (err) {
+      console.error('🔊 App: Fallback speech failed', err);
+    }
   };
 
   // Hand detection hook
