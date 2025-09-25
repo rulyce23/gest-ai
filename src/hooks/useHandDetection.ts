@@ -3,6 +3,7 @@ import { Hands } from '@mediapipe/hands';
 import { Camera } from '@mediapipe/camera_utils';
 import type { HandResults, GestureDetection, HandLandmark } from '../types';
 import { GestureClassifier } from '../utils/gestureClassifier';
+import AudioClapDetector from '../utils/audioClapDetector';
 
 export const useHandDetection = (
   videoElement: HTMLVideoElement | null,
@@ -18,6 +19,10 @@ export const useHandDetection = (
   const animationFrameRef = useRef<number | undefined>(undefined);
   const lastGestureRef = useRef<string>('');
   const gestureTimeoutRef = useRef<number | undefined>(undefined);
+  const audioClapRef = useRef<AudioClapDetector | null>(null);
+  const lastAudioClapRef = useRef<number>(0);
+  // per-hand temporal history (label -> samples)
+  const historyRef = useRef<Record<string, Array<{ ts: number; wrist: { x: number; y: number }; palmCenter: { x: number; y: number } }>>>({});
 
   // Initialize MediaPipe Hands
   const initializeHands = useCallback(async () => {
@@ -55,58 +60,142 @@ export const useHandDetection = (
 
   // Process hand detection results
   const processResults = useCallback((results: HandResults) => {
-    console.log('🤖 HandDetection: Processing results:', results);
+    // Improved processing: pair landmarks with handedness, maintain per-hand history,
+    // and detect temporal gestures (clap with audio confirmation, namaste, raise both, wave)
+    if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) return;
 
-    if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-      console.log('🤖 HandDetection: No hand landmarks detected');
-      return;
+    const now = Date.now();
+    // Pair landmarks by handedness label when available
+    const handsByLabel: Record<string, HandLandmark[]> = {};
+    if (results.multiHandLandmarks && results.multiHandedness && results.multiHandLandmarks.length === results.multiHandedness.length) {
+      results.multiHandedness.forEach((h, idx) => {
+        const label = h.label || `Hand${idx}`;
+        handsByLabel[label] = results.multiHandLandmarks![idx] as HandLandmark[];
+      });
+    } else {
+      results.multiHandLandmarks.forEach((lm, idx) => {
+        handsByLabel[`Hand${idx}`] = lm as HandLandmark[];
+      });
     }
 
-    console.log(`🤖 HandDetection: Detected ${results.multiHandLandmarks.length} hand(s)`);
+    // helper: compute palm center
+    const palmCenter = (lm: HandLandmark[]) => {
+      const pts = [5,9,13,17].map(i => lm[i]);
+      const avgX = pts.reduce((s,p) => s + p.x, 0) / pts.length;
+      const avgY = pts.reduce((s,p) => s + p.y, 0) / pts.length;
+      return { x: avgX, y: avgY };
+    };
+
+    // update histories
+    Object.entries(handsByLabel).forEach(([label, lm]) => {
+      const wrist = { x: lm[0].x, y: lm[0].y };
+      const palm = palmCenter(lm);
+      historyRef.current[label] = historyRef.current[label] || [];
+      historyRef.current[label].push({ ts: now, wrist, palmCenter: palm });
+      if (historyRef.current[label].length > 30) historyRef.current[label].shift();
+    });
+
     let detectedGesture: GestureDetection | null = null;
 
-    if (results.multiHandLandmarks.length === 1) {
-      // Single hand gesture
-      const landmarks = results.multiHandLandmarks[0] as HandLandmark[];
-      detectedGesture = GestureClassifier.classifyGesture(landmarks);
-      console.log('🤖 HandDetection: Single hand gesture detected:', detectedGesture);
-    } else if (results.multiHandLandmarks.length === 2) {
-      // Two hand gesture
-      const leftHand = results.multiHandLandmarks[0] as HandLandmark[];
-      const rightHand = results.multiHandLandmarks[1] as HandLandmark[];
+    const labels = Object.keys(handsByLabel);
+    if (labels.length === 2) {
+      const [la, lb] = labels;
+      const a = handsByLabel[la];
+      const b = handsByLabel[lb];
+      const aPalm = palmCenter(a);
+      const bPalm = palmCenter(b);
+      const palmDist = GestureClassifier.distance(aPalm as any, bPalm as any);
 
-      // Try two-hand gestures first
-      detectedGesture = GestureClassifier.classifyTwoHandGesture(leftHand, rightHand);
-      console.log('🤖 HandDetection: Two hand gesture detected:', detectedGesture);
+      // Clap: palms rapidly approach AND (audio spike within 800ms OR no audio available)
+      const ah = historyRef.current[la] || [];
+      const bh = historyRef.current[lb] || [];
+      const aPrev = ah.length >= 5 ? ah[ah.length-5].palmCenter : null;
+      const bPrev = bh.length >= 5 ? bh[bh.length-5].palmCenter : null;
+      if (aPrev && bPrev) {
+        const prevDist = GestureClassifier.distance(aPrev as any, bPrev as any);
+        // approaching quickly
+        if (prevDist - palmDist > 0.12 && palmDist < 0.12) {
+          const audioConfirm = lastAudioClapRef.current && (now - lastAudioClapRef.current) < 800;
+          if (audioConfirm || !audioClapRef.current) {
+            detectedGesture = { gesture: 'Clap', confidence: 0.97, timestamp: now };
+          }
+        }
+      }
 
-      // If no two-hand gesture, try single hand gestures
+      // Namaste (prayer) - palms close and wrist distance small and middle tips close
       if (!detectedGesture) {
-        detectedGesture = GestureClassifier.classifyGesture(leftHand) ||
-                          GestureClassifier.classifyGesture(rightHand);
-        console.log('🤖 HandDetection: Fallback single hand gesture:', detectedGesture);
+        const leftWrist = a[0];
+        const rightWrist = b[0];
+        const leftMid = a[12];
+        const rightMid = b[12];
+        const wristDist = GestureClassifier.distance(leftWrist as any, rightWrist as any);
+        const tipDist = GestureClassifier.distance(leftMid as any, rightMid as any);
+        if (palmDist < 0.14 && wristDist < 0.18 && tipDist < 0.08) {
+          detectedGesture = { gesture: 'Namaste', confidence: 0.95, timestamp: now };
+        }
+      }
+
+      // Cross Hands - simple horizontal crossing check
+      if (!detectedGesture) {
+        if (a[0].x > b[0].x + 0.02) {
+          detectedGesture = { gesture: 'Cross Hands', confidence: 0.9, timestamp: now };
+        }
+      }
+
+      // Raise Both Hands - wrists above palms
+      if (!detectedGesture) {
+        const aRaised = a[0].y < a[9].y - 0.02;
+        const bRaised = b[0].y < b[9].y - 0.02;
+        if (aRaised && bRaised) {
+          detectedGesture = { gesture: 'Raise Both Hands', confidence: 0.9, timestamp: now };
+        }
       }
     }
 
-    // Handle gesture detection with debouncing
-    if (detectedGesture && detectedGesture.gesture !== lastGestureRef.current) {
-      console.log('🤖 HandDetection: New gesture detected:', detectedGesture.gesture);
+    // Single hand gestures and wave (temporal)
+    if (!detectedGesture) {
+      for (const [label, lm] of Object.entries(handsByLabel)) {
+        const hist = historyRef.current[label] || [];
+        const staticGuess = GestureClassifier.classifyGesture(lm);
 
-      // Clear previous timeout
-      if (gestureTimeoutRef.current) {
-        clearTimeout(gestureTimeoutRef.current);
+        // Wave: require Open Palm static + horizontal wrist oscillation
+        if (staticGuess && staticGuess.gesture === 'Open Palm') {
+          const xs = hist.map(h => h.wrist.x);
+          let reversals = 0;
+          for (let i = 2; i < xs.length; i++) {
+            if ((xs[i] - xs[i-1]) * (xs[i-1] - xs[i-2]) < 0) reversals++;
+          }
+          const amplitude = xs.length ? Math.max(...xs) - Math.min(...xs) : 0;
+          if (reversals >= 2 && amplitude > 0.06) {
+            detectedGesture = { gesture: 'Wave', confidence: 0.92, timestamp: now };
+            break;
+          }
+
+          // Raise single hand: wrist high and sustained for short period
+          const recent = hist.slice(-6);
+          const sustainedHigh = recent.length >= 4 && recent.every(h => h.wrist.y < 0.38);
+          if (sustainedHigh) {
+            detectedGesture = { gesture: 'Raise Hand', confidence: 0.9, timestamp: now };
+            break;
+          }
+        }
+
+        // fallback to classifier for stable single-hand gestures
+        if (!detectedGesture && staticGuess) {
+          detectedGesture = staticGuess;
+          break;
+        }
       }
+    }
 
-      // Set new timeout for gesture stability
+    // Debounce and callback
+    if (detectedGesture && detectedGesture.gesture !== lastGestureRef.current) {
+      if (gestureTimeoutRef.current) clearTimeout(gestureTimeoutRef.current);
       gestureTimeoutRef.current = window.setTimeout(() => {
-        console.log('🤖 HandDetection: Triggering gesture callback for:', detectedGesture!.gesture);
         lastGestureRef.current = detectedGesture!.gesture;
         onGestureDetected?.(detectedGesture!);
-
-        // Reset after a delay to allow for new detections
-        setTimeout(() => {
-          lastGestureRef.current = '';
-        }, 2000); // Allow 2 seconds before detecting same gesture again
-      }, 200); // Reduced to 200ms for faster response
+        setTimeout(() => { lastGestureRef.current = ''; }, 1800);
+      }, 150);
     }
   }, [onGestureDetected]);
 
@@ -130,6 +219,17 @@ export const useHandDetection = (
       await cameraInstance.start();
       setCamera(cameraInstance);
       setIsDetecting(true);
+      // start audio clap detector
+      try {
+        audioClapRef.current = new AudioClapDetector({ threshold: 0.25, cooldownMs: 300 });
+        audioClapRef.current.on('clap', () => {
+          lastAudioClapRef.current = Date.now();
+          console.log('🔊 AudioClapDetector: clap detected');
+        });
+        audioClapRef.current.start();
+      } catch (err) {
+        console.warn('AudioClapDetector failed to start', err);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start hand detection');
     }
@@ -153,6 +253,11 @@ export const useHandDetection = (
     setIsDetecting(false);
     setLastResults(null);
     lastGestureRef.current = '';
+    // stop audio clap detector
+    try {
+      audioClapRef.current?.stop();
+    } catch (e) {}
+    audioClapRef.current = null;
   }, [camera]);
 
   // Update detection settings

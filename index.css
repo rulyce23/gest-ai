@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  body {
+    @apply bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800;
+    @apply text-gray-900 dark:text-gray-100;
+    @apply min-h-screen;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700;
+    @apply text-white font-medium px-6 py-3 rounded-xl;
+    @apply transform transition-all duration-200 hover:scale-105;
+    @apply shadow-lg hover:shadow-xl;
+  }
+
+  .btn-secondary {
+    @apply bg-white dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-600;
+    @apply text-gray-700 dark:text-gray-300 font-medium px-6 py-3 rounded-xl;
+    @apply transform transition-all duration-200 hover:scale-105;
+    @apply shadow-md hover:shadow-lg;
+  }
+
+  .card {
+    @apply bg-white dark:bg-gray-800 rounded-2xl shadow-xl;
+    @apply border border-gray-100 dark:border-gray-700;
+    @apply backdrop-blur-sm bg-opacity-90 dark:bg-opacity-90;
+  }
+
+  .gesture-panel {
+    @apply card p-6 space-y-4;
+    @apply transform transition-all duration-300;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent;
+  }
+
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+  }
+}
