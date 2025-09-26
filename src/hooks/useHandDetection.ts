@@ -16,7 +16,7 @@ export const useHandDetection = (
   const [error, setError] = useState<string | null>(null);
 
   const animationFrameRef = useRef<number | undefined>(undefined);
-  const lastGestureRef = useRef<string>(''); 
+  const lastGestureRef = useRef<string>('');
   const gestureTimeoutRef = useRef<number | undefined>(undefined);
 
   // Initialize MediaPipe Hands
@@ -34,9 +34,8 @@ export const useHandDetection = (
       handsInstance.setOptions({
         maxNumHands: 2,
         modelComplexity: 1 as 0 | 1,
-        minDetectionConfidence: 0.8,
-        minTrackingConfidence: 0.6,
-        selfieMode: true
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.5
       });
 
       handsInstance.onResults((results: any) => {
@@ -78,7 +77,7 @@ export const useHandDetection = (
       const rightHand = sortedHands[1] as HandLandmark[];
 
       // Try two-hand gestures first
-      detectedGesture = GestureClassifier.classifyTwoHandGesture(leftHand, rightHand, results.multiHandedness);
+      detectedGesture = GestureClassifier.classifyTwoHandGesture(leftHand, rightHand);
       console.log('🤖 HandDetection: Two hand gesture detected:', detectedGesture);
 
       // If no two-hand gesture, try single hand gestures
