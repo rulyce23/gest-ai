@@ -43,14 +43,11 @@ export interface AppSettings {
   ttsVolume: number;
 }
 
-export type GestureType = 
+export type GestureType =
   | 'Wave'
   | 'Open Palm'
   | 'Thumbs-Up'
-  | 'Fist'
   | 'Pointing'
   | 'Victory'
-  | 'Clap'
   | 'Cross Hands'
-  | 'Raise Both Hands'
   | 'Namaste';

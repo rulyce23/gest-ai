@@ -3,7 +3,6 @@ import type { AppSettings } from '../types';
 export class TTSService {
   private synthesis: SpeechSynthesis;
   private settings: Partial<AppSettings>;
-  private audioCtx: AudioContext | null = null;
 
   constructor(settings: Partial<AppSettings> = {}) {
     this.synthesis = window.speechSynthesis;
@@ -20,14 +19,7 @@ export class TTSService {
     this.settings = { ...this.settings, ...newSettings };
   }
 
-  async speak(text: string): Promise<void> {
-    // Ensure audio system is 'unlocked' where possible before attempting speech
-    try {
-      await this.ensureAudioUnlocked();
-    } catch (err) {
-      console.warn('🔊 TTS: Audio unlock attempt failed or unavailable', err);
-    }
-
+  speak(text: string): Promise<void> {
     return new Promise((resolve, reject) => {
       console.log('🔊 TTS: Attempting to speak:', text);
 
@@ -90,77 +82,8 @@ export class TTSService {
 
       // Speak immediately
       console.log('🔊 TTS: Executing speech synthesis...');
-      try {
-        this.synthesis.speak(utterance);
-      } catch (err) {
-        console.error('🔊 TTS: speechSynthesis.speak threw', err);
-        reject(err as Error);
-        return;
-      }
-
-      // Fallback: if speech never starts because of autoplay policies, resolve after timeout
-      const fallbackTimeout = window.setTimeout(() => {
-        if (!this.synthesis.speaking) {
-          console.warn('🔊 TTS: Fallback timeout reached and speech did not start');
-          resolve();
-        }
-      }, 5000);
-
-      // Clear fallback on natural end / error
-      const clearAndResolve = () => {
-        clearTimeout(fallbackTimeout);
-        resolve();
-      };
-
-      utterance.onend = () => {
-        console.log('🔊 TTS: FINISHED speaking');
-        clearAndResolve();
-      };
-
-      utterance.onerror = (event) => {
-        console.error('🔊 TTS: ERROR -', event.error);
-        clearTimeout(fallbackTimeout);
-        reject(new Error(`TTS Error: ${event.error}`));
-      };
+      this.synthesis.speak(utterance);
     });
-  }
-
-  private async ensureAudioUnlocked(): Promise<void> {
-    try {
-      if (!this.audioCtx) {
-        const Ctor = (window as any).AudioContext || (window as any).webkitAudioContext;
-        if (!Ctor) return Promise.resolve();
-        this.audioCtx = new Ctor();
-      }
-
-      // Resume audio context if suspended
-      const ctx = this.audioCtx;
-      if (!ctx) return Promise.resolve();
-
-      if (ctx.state === 'suspended') {
-        try {
-          await ctx.resume();
-        } catch (err) {
-          // continue to try oscillator approach
-        }
-      }
-
-      // Play a very short silent buffer / near-silent oscillator to try to unlock audio on some browsers
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      gain.gain.value = 0.0001; // near-silent but will count as an audio output
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      await new Promise<void>((res) => setTimeout(() => {
-        try { osc.stop(); } catch (e) {}
-        res();
-      }, 30));
-    } catch (err) {
-      // Not fatal; some browsers will still block until a real user gesture
-      console.warn('🔊 TTS: ensureAudioUnlocked encountered an error', err);
-      return Promise.resolve();
-    }
   }
 
   stop() {

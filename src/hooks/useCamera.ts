@@ -60,7 +60,8 @@ export const useCamera = () => {
           deviceId: { exact: targetDeviceId },
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          frameRate: { ideal: 30 }
+          frameRate: { ideal: 30 },
+          facingMode: { ideal: 'user' } // Prefer front camera for mobile
         },
         audio: false
       };
